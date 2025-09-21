@@ -31,14 +31,14 @@ interface UserMediaState {
   cameraDevices: MediaDeviceInfo[];
   activeCameraId?: string;
   stopActiveCamera: () => void;
-  changeActiveCamera: (deviceId: string) => Promise<void>;
+  changeActiveCamera: (deviceId: string) => Promise<LocalTrack>;
 
   getMicrophone: (deviceId: string) => Promise<LocalTrack>;
   microphoneDevices: MediaDeviceInfo[];
   activeMicrophoneId?: string;
   muteActiveMicrophone: () => void;
   unMuteActiveMicrophone: () => void;
-  changeActiveMicrophone: (deviceId: string) => Promise<void>;
+  changeActiveMicrophone: (deviceId: string) => Promise<LocalTrack>;
   getActiveMicrophoneLevel: () => {
     avgDb: number;
     peakDb: number;
@@ -48,30 +48,18 @@ interface UserMediaState {
 export const UserMediaContext = createContext({} as UserMediaState);
 export default UserMediaContext;
 
-const defaultCameraOption: CreateLocalMediaOptions = {
-  video: {},
-};
-
+const defaultCameraOption: CreateLocalMediaOptions = { video: {} };
 const defaultMicrophoneOption: CreateLocalMediaOptions = {
   audio: { constraints: defaultAudioConstraints },
 };
-
-const noCameraOption: CreateLocalMediaOptions = {
-  video: false,
-};
-
-const noMicrophoneOption: CreateLocalMediaOptions = {
-  audio: false,
-};
-
+const noCameraOption: CreateLocalMediaOptions = { video: false };
+const noMicrophoneOption: CreateLocalMediaOptions = { audio: false };
 const defaultMicrophoneCameraOptions: CreateLocalMediaOptions = {
   ...defaultCameraOption,
   ...defaultMicrophoneOption,
 };
 
-type Props = {
-  children: ReactNode;
-};
+type Props = { children: ReactNode };
 
 export const UserMediaProvider: React.FC<Props> = ({ children }) => {
   const {
@@ -82,9 +70,9 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
     userWantsMicMuted,
   } = React.useContext(UserContext);
 
-  const [microphoneDevices, setMicrophoneDevices] = useState<InputDeviceInfo[]>([]);
+  const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [activeMicrophone, setActiveMicrophone] = useState<LocalTrack>();
-  const [cameraDevices, setCameraDevices] = useState<InputDeviceInfo[]>([]);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [activeCamera, setActiveCamera] = useState<LocalTrack>();
   const [localAudioAnalyser, setLocalAudioAnalyser] = useState<AnalyserNode>();
   const [userMediaError, setUserMediaError] = useState<string>();
@@ -103,15 +91,10 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
   }, []);
 
   const loadDevices = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
-      console.warn("MediaDevices API not supported in this environment");
-      return;
-    }
-
-    const availableDevices = await navigator.mediaDevices.enumerateDevices();
-
-    setMicrophoneDevices(availableDevices.filter((d) => d.kind === "audioinput"));
-    setCameraDevices(availableDevices.filter((d) => d.kind === "videoinput"));
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    setMicrophoneDevices(devices.filter((d) => d.kind === "audioinput"));
+    setCameraDevices(devices.filter((d) => d.kind === "videoinput"));
   }, []);
 
   const requestPermissionAndPopulateDevices = useCallback(async () => {
@@ -121,58 +104,32 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
         audio: { constraints: { deviceId: microphoneDeviceId } },
         video: { constraints: { deviceId: cameraDeviceId } },
       });
-    } catch (e) {
-      console.log("Failed to request default devices from browser.");
+    } catch {
+      console.log("Failed to request default devices");
     }
 
-    try {
-      tracks.forEach((track) => {
-        if (track.deviceId) {
-          if (track.source === TrackSource.Camera) {
-            setCameraDeviceId(track.deviceId);
-          } else if (track.source === TrackSource.Microphone) {
-            setMicrophoneDeviceId(track.deviceId);
-          }
-        }
-      });
-    } catch {
-      console.log("Error while stopping devices.");
-    }
+    tracks.forEach((track) => {
+      if (track.deviceId) {
+        if (track.source === TrackSource.Camera) setCameraDeviceId(track.deviceId);
+        else if (track.source === TrackSource.Microphone) setMicrophoneDeviceId(track.deviceId);
+      }
+      track.track.stop();
+    });
 
     await loadDevices();
-    tracks.forEach((track) => track.track.stop());
-  }, [cameraDeviceId, loadDevices, microphoneDeviceId, setCameraDeviceId, setMicrophoneDeviceId]);
+  }, [cameraDeviceId, microphoneDeviceId, setCameraDeviceId, setMicrophoneDeviceId, loadDevices]);
 
   const requestPermissionAndStartDevices = useCallback(
     async (microphoneDeviceId?: string, cameraDeviceId?: string) => {
-      let options = { ...defaultMicrophoneCameraOptions };
-
-      if (typeof microphoneDeviceId === "undefined") {
-        options["audio"] = false;
-      } else if (microphoneDeviceId !== "") {
-        options["audio"] = {
-          constraints: { deviceId: { exact: microphoneDeviceId }, ...defaultAudioConstraints },
-        };
-      }
-
-      if (typeof cameraDeviceId === "undefined") {
-        options["video"] = false;
-      } else if (cameraDeviceId !== "") {
-        options["video"] = { constraints: { deviceId: { exact: cameraDeviceId } } };
-      }
+      let options: CreateLocalMediaOptions = { ...defaultMicrophoneCameraOptions };
+      if (microphoneDeviceId === undefined) options.audio = false;
+      else if (microphoneDeviceId !== "") options.audio = { constraints: { deviceId: { exact: microphoneDeviceId }, ...defaultAudioConstraints } };
+      if (cameraDeviceId === undefined) options.video = false;
+      else if (cameraDeviceId !== "") options.video = { constraints: { deviceId: { exact: cameraDeviceId } } };
 
       let tracks: LocalTrack[] = [];
-      try {
-        tracks = await getUserMedia(options);
-      } catch (e: any) {
-        if (["NotAllowedError", "PermissionDeniedError"].includes(e.name) || e instanceof DOMException) {
-          setUserMediaError("NotAllowedError");
-        } else if (["OverconstrainedError", "ConstraintNotSatisfiedError"].includes(e.name)) {
-          tracks = await getUserMedia({ audio: true, video: true });
-        } else {
-          setUserMediaError(e.name);
-        }
-      }
+      try { tracks = await getUserMedia(options); } 
+      catch (e: any) { setUserMediaError(e.name); }
 
       tracks.forEach((track) => {
         if (track.source === TrackSource.Microphone) {
@@ -188,7 +145,7 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
 
       await loadDevices();
     },
-    [setupLocalMicrophoneAnalyser, setMicrophoneDeviceId, setCameraDeviceId, userWantsMicMuted, loadDevices]
+    [setupLocalMicrophoneAnalyser, setCameraDeviceId, setMicrophoneDeviceId, userWantsMicMuted, loadDevices]
   );
 
   const muteActiveMicrophone = useCallback(() => activeMicrophone?.mute(), [activeMicrophone]);
@@ -197,22 +154,11 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
   const getMicrophone = useCallback(
     async (deviceId: string) => {
       let options = { ...defaultMicrophoneOption, ...noCameraOption };
-      if (deviceId !== "") {
-        options["audio"] = { constraints: { deviceId: { exact: deviceId }, ...defaultAudioConstraints } };
-      }
+      if (deviceId !== "") options.audio = { constraints: { deviceId: { exact: deviceId }, ...defaultAudioConstraints } };
 
       let tracks: LocalTrack[] = [];
-      try {
-        tracks = await getUserMedia(options);
-      } catch (e: any) {
-        if (["NotAllowedError", "PermissionDeniedError"].includes(e.name) || e instanceof DOMException) {
-          setUserMediaError("NotAllowedError");
-        } else if (["OverconstrainedError", "ConstraintNotSatisfiedError"].includes(e.name)) {
-          setUserMediaError("OverconstrainedError");
-        } else {
-          setUserMediaError(e.name);
-        }
-      }
+      try { tracks = await getUserMedia(options); } 
+      catch (e: any) { setUserMediaError(e.name); }
 
       tracks.forEach((track) => {
         if (track.source === TrackSource.Microphone) {
@@ -228,42 +174,25 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
     [setupLocalMicrophoneAnalyser, setMicrophoneDeviceId, userWantsMicMuted]
   );
 
-  const changeActiveMicrophone = useCallback(async (deviceId: string) => await getMicrophone(deviceId), [getMicrophone]);
+  const changeActiveMicrophone = useCallback(async (deviceId: string) => getMicrophone(deviceId), [getMicrophone]);
 
   const getActiveMicrophoneLevel = useCallback(() => {
     if (!localAudioAnalyser) return null;
-
-    const sampleBuffer = new Float32Array(localAudioAnalyser.fftSize);
-    localAudioAnalyser.getFloatTimeDomainData(sampleBuffer);
-
-    let sumOfSquares = 0;
-    for (let i = 0; i < sampleBuffer.length; i++) sumOfSquares += sampleBuffer[i] ** 2;
-    const avgPowerDecibels = 10 * Math.log10(sumOfSquares / sampleBuffer.length);
-
-    let peakInstantaneousPower = 0;
-    for (let i = 0; i < sampleBuffer.length; i++) peakInstantaneousPower = Math.max(sampleBuffer[i] ** 2, peakInstantaneousPower);
-    const peakInstantaneousPowerDecibels = 10 * Math.log10(peakInstantaneousPower);
-
-    return { avgDb: avgPowerDecibels, peakDb: peakInstantaneousPowerDecibels };
+    const buffer = new Float32Array(localAudioAnalyser.fftSize);
+    localAudioAnalyser.getFloatTimeDomainData(buffer);
+    const sum = buffer.reduce((acc, val) => acc + val ** 2, 0);
+    const peak = Math.max(...buffer.map((v) => v ** 2));
+    return { avgDb: 10 * Math.log10(sum / buffer.length), peakDb: 10 * Math.log10(peak) };
   }, [localAudioAnalyser]);
 
   const getCamera = useCallback(
     async (deviceId: string) => {
       let options = { ...defaultCameraOption, ...noMicrophoneOption };
-      if (deviceId !== "") options["video"] = { constraints: { deviceId: { exact: deviceId } } };
+      if (deviceId !== "") options.video = { constraints: { deviceId: { exact: deviceId } } };
 
       let tracks: LocalTrack[] = [];
-      try {
-        tracks = await getUserMedia(options);
-      } catch (e: any) {
-        if (["NotAllowedError", "PermissionDeniedError"].includes(e.name) || e instanceof DOMException) {
-          setUserMediaError("NotAllowedError");
-        } else if (["OverconstrainedError", "ConstraintNotSatisfiedError"].includes(e.name)) {
-          setUserMediaError("OverconstrainedError");
-        } else {
-          setUserMediaError(e.name);
-        }
-      }
+      try { tracks = await getUserMedia(options); } 
+      catch (e: any) { setUserMediaError(e.name); }
 
       tracks.forEach((track) => {
         if (track.source === TrackSource.Camera) {
@@ -277,34 +206,20 @@ export const UserMediaProvider: React.FC<Props> = ({ children }) => {
     [setCameraDeviceId]
   );
 
-  const changeActiveCamera = useCallback(async (deviceId: string) => await getCamera(deviceId), [getCamera]);
+  const changeActiveCamera = useCallback(async (deviceId: string) => getCamera(deviceId), [getCamera]);
 
   const stopActiveCamera = useCallback(() => {
-    if (activeCamera) {
-      activeCamera.stop();
-      setActiveCamera(undefined);
-    }
+    if (activeCamera) { activeCamera.stop(); setActiveCamera(undefined); }
   }, [activeCamera]);
 
-  const onDeviceChange = useCallback(async () => {
-    console.log("Detected device change, refreshing device list");
-    await loadDevices();
-  }, [loadDevices]);
+  const onDeviceChange = useCallback(async () => { await loadDevices(); }, [loadDevices]);
 
-  useEffect(() => {
-    if (userWantsMicMuted && !activeMicrophone?.muted) {
-      activeMicrophone?.mute();
-    } else if (!userWantsMicMuted && activeMicrophone?.muted) {
-      activeMicrophone?.unMute();
-    }
-  }, [userWantsMicMuted, activeMicrophone]);
+  useEffect(() => { if (userWantsMicMuted && !activeMicrophone?.muted) activeMicrophone?.mute(); else if (!userWantsMicMuted && activeMicrophone?.muted) activeMicrophone?.unMute(); }, [userWantsMicMuted, activeMicrophone]);
 
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
       navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
-      return () => {
-        navigator.mediaDevices?.removeEventListener("devicechange", onDeviceChange);
-      };
+      return () => navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
     }
   }, [onDeviceChange]);
 
