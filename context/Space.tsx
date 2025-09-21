@@ -132,35 +132,38 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
 
   // --- Helpers ---
   const publishForLocalParticipant = useCallback(
-    async (localParticipant: LocalParticipant) => {
-      const tracksToPublish: Track[] = [];
-      if (cameraDeviceId && !cameraOff) {
-        const cameraTrack = await getCamera(cameraDeviceId);
-        if (cameraTrack) tracksToPublish.push(cameraTrack);
+  async (localParticipant: LocalParticipant) => {
+    const tracksToPublish: LocalTrack[] = [];
+
+    if (cameraDeviceId && !cameraOff) {
+      const cameraTrack = await getCamera(cameraDeviceId);
+      if (cameraTrack) tracksToPublish.push(cameraTrack);
+    }
+
+    if (microphoneDeviceId) {
+      const microphoneTrack = await getMicrophone(microphoneDeviceId);
+      if (microphoneTrack) tracksToPublish.push(microphoneTrack);
+    }
+
+    if (tracksToPublish.length > 0) {
+      const publishedTracks = await localParticipant.publishTracks(tracksToPublish);
+      const publishedMicrophone = publishedTracks.find(
+        (track) => track.source === TrackSource.Microphone
+      );
+      if (publishedMicrophone && userWantsMicMuted) {
+        publishedMicrophone.mute();
       }
-      if (microphoneDeviceId) {
-        const microphoneTrack = await getMicrophone(microphoneDeviceId);
-        if (microphoneTrack) tracksToPublish.push(microphoneTrack);
-      }
-      if (tracksToPublish.length > 0) {
-        const publishedTracks = await localParticipant.publishTracks(tracksToPublish);
-        const publishedMicrophone = publishedTracks.find(
-          (track) => track.source === TrackSource.Microphone
-        );
-        if (publishedMicrophone && userWantsMicMuted) {
-          publishedMicrophone.mute();
-        }
-      }
-    },
-    [
-      cameraOff,
-      getMicrophone,
-      microphoneDeviceId,
-      getCamera,
-      cameraDeviceId,
-      userWantsMicMuted,
-    ]
-  );
+    }
+  },
+  [
+    cameraOff,
+    getMicrophone,
+    microphoneDeviceId,
+    getCamera,
+    cameraDeviceId,
+    userWantsMicMuted,
+  ]
+);
 
   const router = useRouter();
 
