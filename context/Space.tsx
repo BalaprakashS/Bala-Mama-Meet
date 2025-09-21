@@ -3,7 +3,6 @@ import React, {
   ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -24,7 +23,6 @@ import {
 } from "@mux/spaces-web";
 
 import { MAX_PARTICIPANTS_PER_PAGE } from "lib/constants";
-
 import UserContext from "./User";
 import UserMediaContext from "./UserMedia";
 
@@ -88,12 +86,6 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
   const [isJoined, setIsJoined] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
-  const [isLocalScreenShareSupported, setIsLocalScreenShareSupported] =
-    useState(
-      typeof window !== "undefined"
-        ? !!navigator?.mediaDevices?.getDisplayMedia
-        : false
-    );
 
   const [screenShareTrack, setScreenShareTrack] = useState<Track>();
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
@@ -101,14 +93,12 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
     LocalParticipant | RemoteParticipant | null
   >(null);
 
-  // --- Effects ---
-  useEffect(() => {
-    if (typeof navigator !== "undefined" && navigator.mediaDevices?.getDisplayMedia) {
-      setIsLocalScreenShareSupported(true);
-    } else {
-      setIsLocalScreenShareSupported(false);
-    }
-  }, []);
+  const isLocalScreenShareSupported = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      typeof navigator?.mediaDevices?.getDisplayMedia === "function",
+    []
+  );
 
   // --- Memoized values ---
   const screenShareParticipantName = useMemo(
@@ -143,7 +133,7 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
   // --- Helpers ---
   const publishForLocalParticipant = useCallback(
     async (localParticipant: LocalParticipant) => {
-      const tracksToPublish = [];
+      const tracksToPublish: Track[] = [];
       if (cameraDeviceId && !cameraOff) {
         const cameraTrack = await getCamera(cameraDeviceId);
         if (cameraTrack) tracksToPublish.push(cameraTrack);
@@ -198,7 +188,9 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
 
       const handleParticipantJoined = (newParticipant: RemoteParticipant) => {
         setRemoteParticipants((old) => {
-          const found = old.find((p) => p.connectionId === newParticipant.connectionId);
+          const found = old.find(
+            (p) => p.connectionId === newParticipant.connectionId
+          );
           return found ? old : [...old, newParticipant];
         });
       };
@@ -283,7 +275,9 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
       ) => {
         if (updated instanceof RemoteParticipant) {
           setRemoteParticipants((old) => {
-            const found = old.find((p) => p.connectionId === updated.connectionId);
+            const found = old.find(
+              (p) => p.connectionId === updated.connectionId
+            );
             if (found) found.displayName = updated.displayName;
             return [...old];
           });
@@ -327,7 +321,7 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
 
       try {
         const _localParticipant = await _space.join();
-        publishForLocalParticipant(_localParticipant);
+        await publishForLocalParticipant(_localParticipant);
         setLocalParticipant(_localParticipant);
         setIsBroadcasting(_space.broadcasting);
         setIsJoined(true);
@@ -344,84 +338,73 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
   // --- Device publishing ---
   const publishMicrophone = useCallback(
     async (deviceId: string) => {
-      if (!localParticipant) throw new Error("Join a space before publishing a device.");
-      if (microphoneDeviceId !== deviceId) {
-        const micTrack = await getMicrophone(deviceId);
-        localParticipant.updateTracks([micTrack]);
-      } else {
-        const publishedMic = localParticipant
-          .getAudioTracks()
-          .find((track) => track.source === TrackSource.Microphone && track.deviceId === deviceId);
-        if (publishedMic) throw new Error("That microphone is already published.");
-        const micTrack = await getMicrophone(deviceId);
-        await localParticipant.publishTracks([micTrack]);
-        if (userWantsMicMuted) micTrack.mute();
-      }
+      if (!localParticipant)
+        throw new Error("Join a space before publishing a device.");
+      const micTrack = await getMicrophone(deviceId);
+      const publishedMic = localParticipant
+        .getAudioTracks()
+        .find(
+          (t) => t.source === TrackSource.Microphone && t.deviceId === deviceId
+        );
+      if (publishedMic) throw new Error("That microphone is already published.");
+      await localParticipant.publishTracks([micTrack]);
+      if (userWantsMicMuted) micTrack.mute();
     },
-    [localParticipant, microphoneDeviceId, getMicrophone, userWantsMicMuted]
+    [localParticipant, getMicrophone, userWantsMicMuted]
   );
 
   const publishCamera = useCallback(
     async (deviceId: string) => {
-      if (!localParticipant) throw new Error("Join a space before publishing a device.");
-      if (cameraDeviceId !== deviceId) {
-        const camTrack = await getCamera(deviceId);
-        localParticipant.updateTracks([camTrack]);
-      } else {
-        const publishedCam = localParticipant
-          .getVideoTracks()
-          .find((track) => track.source === TrackSource.Camera && track.deviceId === deviceId);
-        if (publishedCam) throw new Error("That camera is already published.");
-        const camTrack = await getCamera(deviceId);
-        localParticipant.publishTracks([camTrack]);
-      }
+      if (!localParticipant)
+        throw new Error("Join a space before publishing a device.");
+      const camTrack = await getCamera(deviceId);
+      const publishedCam = localParticipant
+        .getVideoTracks()
+        .find(
+          (t) => t.source === TrackSource.Camera && t.deviceId === deviceId
+        );
+      if (publishedCam) throw new Error("That camera is already published.");
+      await localParticipant.publishTracks([camTrack]);
     },
-    [localParticipant, cameraDeviceId, getCamera]
+    [localParticipant, getCamera]
   );
 
   const unPublishDevice = useCallback(
-    (deviceId: string): void => {
-      if (!localParticipant) throw new Error("Join a space and publish a device before un-publishing.");
-      const published = localParticipant.getTracks().find((track) => track.deviceId === deviceId);
-      if (published) {
-        localParticipant.unpublishTracks([published]);
-      } else {
-        console.warn("Device to unpublish was not found.");
-      }
+    (deviceId: string) => {
+      if (!localParticipant)
+        throw new Error(
+          "Join a space and publish a device before un-publishing."
+        );
+      const published = localParticipant
+        .getTracks()
+        .find((track) => track.deviceId === deviceId);
+      if (published) localParticipant.unpublishTracks([published]);
     },
     [localParticipant]
   );
 
   // --- Screen share ---
   const startScreenShare = useCallback(async () => {
+    if (!localParticipant) return;
     try {
       const screenStreams = await getDisplayMedia({ video: true, audio: false });
-      const screenStream = screenStreams?.find((track) => track.source === "screenshare");
-      if (screenStream && localParticipant) {
-        return localParticipant
-          .publishTracks([screenStream])
-          .then((publishedTracks: LocalTrack[]) => {
-            if (publishedTracks.length < 1) throw new Error("Failed to publish track.");
-            return publishedTracks[0];
-          });
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        if (error.message === "Permission denied") return; // user cancelled
-        if (error.message === "Permission denied by system") {
-          setScreenShareError(error.message);
-        } else {
-          console.error("Screen share error:", error);
-        }
-      }
+      const screenStream = screenStreams?.find(
+        (track) => track.source === "screenshare"
+      );
+      if (!screenStream) throw new Error("No screen share track found.");
+      return localParticipant
+        .publishTracks([screenStream])
+        .then((tracks: LocalTrack[]) => tracks[0]);
+    } catch (err: any) {
+      if (err.message.includes("Permission denied")) return;
+      setScreenShareError(err.message);
+      console.error("Screen share error:", err);
     }
   }, [localParticipant]);
 
   const stopScreenShare = useCallback(async () => {
     if (!screenShareTrack || !(screenShareTrack instanceof LocalTrack)) return;
-    if (localParticipant) {
-      localParticipant.unpublishTracks([screenShareTrack]);
-    }
+    if (localParticipant) localParticipant.unpublishTracks([screenShareTrack]);
   }, [localParticipant, screenShareTrack]);
 
   const attachScreenShare = useCallback(
@@ -438,11 +421,7 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
   const submitAcrScore = useCallback(
     (score: AcrScore) => {
       if (!space) throw new Error("You must join a space before submitting an ACR score.");
-      try {
-        return space.submitAcrScore(score);
-      } catch (error) {
-        throw new Error(`Error when submitting ACR score: ${error}`);
-      }
+      return space.submitAcrScore(score);
     },
     [space]
   );
@@ -458,30 +437,23 @@ export const SpaceProvider: React.FC<Props> = ({ children }) => {
       setLocalParticipant(null);
       setIsJoined(false);
       setSpaceEndsAt(null);
-      // Keeping space reference for ACR/custom events
     }
   }, [space]);
 
   const publishCustomEvent = useCallback(
     async (payload: string) => {
-      try {
-        return await space?.localParticipant?.publishCustomEvent(payload);
-      } catch (error) {
-        console.error("Error publishing custom event:", error);
-        throw error;
-      }
+      return space?.localParticipant?.publishCustomEvent(payload);
     },
     [space]
   );
 
   const setDisplayName = useCallback(
     async (name: string) => {
-      return await space?.localParticipant?.setDisplayName(name);
+      return space?.localParticipant?.setDisplayName(name);
     },
     [space]
   );
 
-  // --- Provider ---
   return (
     <SpaceContext.Provider
       value={{
